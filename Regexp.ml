@@ -1,0 +1,138 @@
+(*Regexp.ml*)
+
+#use "Fsm.ml";;
+
+(*types*)
+
+type atom =
+  |Q_bool
+  |A_bool of bool
+  |Q_int
+  |A_int of int
+  |RUN
+  |DONE
+  |WRITE_bool of bool
+  |WRITE_int of int
+  |READ_bool
+  |READ_int
+  |OK_bool
+  |OK_int;;
+
+type symbol =
+  |Sym of string
+  |Atom of atom
+  |Tag of string * symbol;;
+
+type regexp =
+  |VIDE
+  |EPSILON
+  |SYMB of symbol
+  |POINT of regexp * regexp
+  |PLUS of regexp * regexp
+  |ETOILE of regexp;;
+
+(*fonctions*)
+
+(*symbol -> string*)
+let rec string_of_symbol symbol =
+  match symbol with
+    |Sym(s) -> s
+    |Atom(a) ->
+       (match a with
+	 |Q_bool -> "question booleenne"
+	 |A_bool(b) -> 
+	    if b then
+	      "reponse vraie"
+	    else
+	      "reponse fausse"
+	 |Q_int -> "question sur entier"
+	 |A_int(n) -> "reponse sur l'entier " ^ string_of_int n
+	 |RUN -> "run"
+	 |DONE -> "done"
+	 |WRITE_bool(b) ->
+	    if b then
+	      "ecriture du booleen vrai"
+	    else
+	      "ecriture du booleen faux"
+	 |WRITE_int(n) -> "ecriture de l'entier " ^ string_of_int n
+	 |READ_bool -> "lecture d'un booleen"
+	 |READ_int -> "lecture d'un entier"
+	 |OK_bool -> "ok booleen"
+	 |OK_int -> "ok entier")
+    |Tag(string, symbol) -> "<" ^ string ^ "> " ^ (string_of_symbol symbol);;
+
+(*regexp -> string*)
+let rec string_of_regexp regexp =
+  match regexp with
+    |VIDE -> "(vide)"
+    |EPSILON -> "(epsilon)"
+    |SYMB(s) -> "(" ^ string_of_symbol s ^ ")"
+    |POINT(r1, r2) -> (string_of_regexp r1) ^ " . " ^(string_of_regexp r2)
+    |PLUS(r1, r2) -> (string_of_regexp r1) ^ " + " ^(string_of_regexp r2)
+    |ETOILE(r) -> "(" ^ (string_of_regexp r) ^ ")*";;
+
+(*regexp -> regexp*)
+let rec simplify_regexp regexp =
+  match regexp with
+    |SYMB(s) -> SYMB(s)
+    |POINT(SYMB(s), r) -> POINT(SYMB(s), simplify_regexp r)
+    |POINT(r, EPSILON) -> POINT(r, regexp)
+    |POINT(EPSILON, r) -> r
+    |POINT(r, VIDE) -> VIDE
+    |POINT(VIDE, r) -> VIDE
+    |PLUS(r, VIDE) -> VIDE
+    |PLUS(VIDE, r) -> simplify_regexp r
+    |PLUS(r1, r2) -> PLUS(simplify_regexp r1, simplify_regexp r2)
+    |ETOILE(EPSILON) -> EPSILON
+    |ETOILE(VIDE) -> VIDE
+    |ETOILE(ETOILE(r)) -> ETOILE(r)
+    |_ -> regexp;;
+
+(*regexp -> automaton*)
+let rec convertRegexp regexp =
+  match regexp with
+    |VIDE -> fsmEmpty()
+    |EPSILON -> buildFsm [(InitAcceptNode "q0")]
+    |SYMB(s) -> buildFsm [(InitNode "q0"); (AcceptNode "q1"); (Edge ("q0", (string_of_symbol s) ,"q1"))]
+    |POINT(r1, r2) -> fsmConcat (convertRegexp r1) (convertRegexp r2)
+    |PLUS(r1, r2) -> fsmUnion (convertRegexp r1) (convertRegexp r2)
+    |ETOILE(r) -> fsmIter (convertRegexp r);;
+
+(*regexp -> regexp -> bool*)
+let rec check_regexp_prop regexp1 regexp2 =
+  let automate1 = (convertRegexp regexp1)
+  and automate2 = (convertRegexp regexp2) in
+    fsmEquiv automate1 automate2;;
+
+(*expressions rationnelles*)
+
+let sI = Sym("I");;
+let sA = Sym("A");;
+let sB = Sym("B");;
+let sC = Sym("C");;
+let sO = Sym("O");;
+let sV = VIDE;;
+  
+let r1 = POINT(VIDE, SYMB(sO));;
+let r2 = PLUS(SYMB(sA), SYMB(sB));;
+let r3 = PLUS(r2, SYMB(sC));;
+let r4 = ETOILE(r3);;
+let r5 = POINT(POINT(SYMB(sI), r4), SYMB(sO));;
+let r6 = POINT(POINT(SYMB(sI), ETOILE(PLUS(PLUS(SYMB(sA), SYMB(sB)), SYMB(sC)))), SYMB(sO));;
+
+let t1 = POINT(SYMB(Atom(Q_int)), SYMB(Tag("x", (Atom(Q_int)))));;
+let t2 = POINT(SYMB(Tag("x", (Atom(A_int(3))))), SYMB(Atom(A_int(3))));;
+let t3 = POINT(t1, t2);;
+
+(*tests*)
+
+simplify_regexp r1;;
+string_of_regexp r1;;
+string_of_regexp r2;;
+string_of_regexp r3;;
+string_of_regexp r4;;
+string_of_regexp r5;;
+string_of_regexp r6;;
+string_of_regexp t1;;
+string_of_regexp t2;;
+string_of_regexp t3;;

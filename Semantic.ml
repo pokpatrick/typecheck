@@ -1,0 +1,290 @@
+(*Semantic.ml*)
+
+#use "Type.ml";;
+#use "Regexp.ml";;
+
+(*constantes, exceptions*)
+
+let _MIN_INT = -1;;
+let _MAX_INT = 2;;
+exception VCSemanticError of string;;
+
+(*fonctions*)
+
+(*int -> int -> symbol list*)
+let rec all_integer_Atom min max =
+  if (min = (max + 1)) then
+    []
+  else
+    Atom(A_int(min))::all_integer_Atom (min + 1) max;;
+
+(*simpleType -> symbol*)
+let questions t =
+  match t with
+    |BOOL -> Atom(Q_bool)
+    |INT -> Atom(Q_int)
+    |COMM -> Atom(RUN);;
+
+(*simpleType -> symbol list*)
+let answers t =
+  match t with
+    |BOOL -> [Atom(A_bool(true)); Atom(A_bool(false))]
+    |INT -> all_integer_Atom _MIN_INT _MAX_INT
+    |COMM -> [Atom(DONE)];;
+
+(*simpleType -> symbol list*)
+let alphabet t =
+  (questions t)::(answers t);;
+	
+(*regexp list -> regexp*)
+let rec sigma l =
+  match l with
+    |[n] -> n
+    |head::tail -> PLUS(head, (sigma tail))
+    |_ -> failwith "ne doit jamais tomber ici";;
+
+let rec csemantic environnement expression =
+  match expression with
+    |SKIP -> EPSILON
+    |DIVCOMM -> VIDE
+    |SEQ(e1, e2) ->
+       POINT(
+	 (csemantic environnement e1),
+	 (csemantic environnement e2))
+    |WHILE(c, e) ->
+       POINT(
+	 ETOILE(
+	   POINT(
+	     (vsemantic environnement c (SIMPLE(BOOL)) (Atom(A_bool(true)))),
+	     (csemantic environnement e))),
+	 (vsemantic environnement c (SIMPLE(BOOL)) (Atom(A_bool(false)))))
+    |IF(c, e1, e2) ->
+       PLUS(
+	 POINT(
+	   (vsemantic environnement c (SIMPLE(BOOL)) (Atom(A_bool(true)))),
+	   (csemantic environnement e1)),
+	 POINT(
+	   (vsemantic environnement c (SIMPLE(BOOL)) (Atom(A_bool(false)))),
+	   (csemantic environnement e2)))
+    |AFFBOOL(s, e) ->
+       (match (valeur_de environnement s) with
+	 |REF(BOOL) ->
+	    PLUS(
+	      POINT(
+		(vsemantic environnement e (REF(BOOL)) (Atom(A_bool(true)))),
+		POINT(
+		  (SYMB(Tag(s, Atom(WRITE_bool(true))))),
+		  (SYMB(Tag(s, Atom(OK_bool)))))),
+	      POINT(
+		(vsemantic environnement e (REF(BOOL)) (Atom(A_bool(false)))),
+		POINT(
+		  (SYMB(Tag(s, Atom(WRITE_bool(false))))),
+		  (SYMB(Tag(s, Atom(OK_bool)))))))
+	 |_ -> failwith "affectation booleenne impossible")
+    |AFFINT(s, e) ->
+       (match (valeur_de environnement s) with
+	 |REF(INT) ->
+	    let rec all_vsemantic_affectation min max =
+	      if(min = (max + 1))then
+		[]
+	      else
+		POINT(
+		  (vsemantic environnement e (SIMPLE(INT)) (Atom(A_int(min))),
+		  POINT(
+		    (SYMB(Tag(s, Atom(WRITE_int(min))))),
+		    (SYMB(Tag(s, Atom(OK_int)))))))
+		::all_vsemantic_affectation (min + 1) max in
+	    sigma (all_vsemantic_affectation _MIN_INT _MAX_INT)
+	 |_ -> failwith "affectation entiere impossible")
+    |_ -> raise (VCSemanticError "matching csemantic impossible")
+       
+and vsemantic environnement expression dataType symbol =
+  match (expression, dataType, symbol) with
+    |(TRUE, SIMPLE(BOOL), Atom(A_bool(b))) ->
+       if(b)then
+	 EPSILON
+       else
+	 VIDE
+    |(DIVINT, SIMPLE(INT), v) -> VIDE
+    |(DIVBOOL, SIMPLE(BOOL), v) -> VIDE
+    |(N(n), SIMPLE(INT), Atom(A_int(integer))) ->
+       if(n = integer)then
+	 EPSILON
+       else
+	 VIDE
+    |(VAR(s), t, Atom(a)) ->
+       (match ((valeur_de environnement s), a) with
+	 |(SIMPLE(BOOL), A_bool(true)) ->
+	    POINT(
+	      SYMB(Tag(s, Atom(Q_bool))),
+	      SYMB(Tag(s, Atom(A_bool(true)))))
+	 |(SIMPLE(BOOL), A_bool(false)) ->
+	    POINT(
+	      SYMB(Tag(s, Atom(Q_bool))),
+	      SYMB(Tag(s, Atom(A_bool(false)))))
+	 |(SIMPLE(INT), A_int(integer)) ->
+	    POINT(
+	      SYMB(Tag(s, Atom(Q_int))),
+	      SYMB(Tag(s, Atom(A_int integer))))
+	 |_ -> failwith "Type de variable incorrect dans vsem")
+    |(LECTBOOL(s), t, a) ->
+       (match ((valeur_de environnement s), a) with
+	 |(SIMPLE(BOOL), Atom(A_bool(b))) ->
+	    POINT(
+	      SYMB(Tag(s, Atom(READ_bool))),
+	      SYMB(Tag(s, Atom(A_bool(b)))))
+	 |_ -> failwith "lecture booleenne impossible")
+    |(LECTINT(s), t, a) ->
+       (match ((valeur_de environnement s), a) with
+	 |(SIMPLE(INT), Atom(A_int(n))) ->
+	    POINT(
+	      SYMB(Tag(s, Atom(READ_int))),
+	      SYMB(Tag(s, Atom(A_int(n)))))
+	 |_ -> failwith "lecture entiere impossible")
+    |(NOT(e), t, Atom(A_bool(b))) ->
+       vsemantic environnement e t (Atom(A_bool(not(b))))
+    |(AND(e1, e2), SIMPLE(BOOL), Atom(A_bool(b))) ->
+       (match b with
+	 |true ->
+	    POINT(
+	      vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(true))),
+	      vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(true))))
+	 |false ->
+	    PLUS(
+	      POINT(
+		vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(false))),
+		vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(false)))),
+	      PLUS(
+		POINT(
+		  vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(true))),
+		  vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(false)))),
+		POINT(
+		  vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(false))),
+		  vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(true)))))))
+    |(EQUAL(e1, e2), t, v) ->
+       (match (t, v) with
+	 |(SIMPLE(BOOL), (Atom(A_bool(true)))) ->
+	    PLUS(
+	      POINT(
+		vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(false))),
+		vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(false)))),
+	      POINT(
+		vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(true))),
+		vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(true)))))
+	 |(SIMPLE(BOOL), (Atom(A_bool(false)))) ->
+	    PLUS(
+	      POINT(
+		vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(false))),
+		vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(true)))),
+	      POINT(
+		vsemantic environnement e1 (SIMPLE(BOOL)) (Atom(A_bool(true))),
+		vsemantic environnement e2 (SIMPLE(BOOL)) (Atom(A_bool(false)))))
+	 |(SIMPLE(INT), (Atom(A_bool(true)))) ->
+	    let rec equal_vsemantic l =
+	      match l with
+		|[] -> []
+		|head::tail ->
+		   POINT(
+		     (vsemantic environnement e1 (SIMPLE(INT)) head),
+		     (vsemantic environnement e2 (SIMPLE(INT)) head))
+		   ::equal_vsemantic tail in
+	    (sigma (equal_vsemantic (all_integer_Atom _MIN_INT _MAX_INT)))
+	 |_ -> failwith "egalite non traite")
+    |(ADD(e1, e2), SIMPLE(INT), Atom(A_int(n))) ->
+       let rec good_integer_couples res min max =
+	 if(min = (max + 1))then
+	   []
+	 else
+	   if(((res - min) >= _MIN_INT) && ((res - min) <= _MAX_INT))then
+	     (min, (res - min))::good_integer_couples res (min + 1) max
+	   else
+	     good_integer_couples res (min + 1) max in
+       let rec add_vsemantic l =
+	 match l with
+	   |[] -> []
+	   |(a, b)::tail ->
+	      POINT(
+		vsemantic environnement e1 (SIMPLE(INT)) (Atom(A_int(a))),
+		vsemantic environnement e2 (SIMPLE(INT)) (Atom(A_int(b))))
+	      ::add_vsemantic tail in
+       sigma (add_vsemantic (good_integer_couples n _MIN_INT _MAX_INT))
+    |(SEQ(e1, e2), t, v) ->
+       POINT(
+	 (csemantic environnement e1),
+	 (vsemantic environnement e2 t v))
+    |(IF(c, e1, e2), t, v) ->
+       PLUS(
+	 POINT(
+	   (vsemantic environnement c (SIMPLE(BOOL)) (Atom(A_bool(true)))),
+	   (vsemantic environnement e1 t v)),
+	 POINT(
+	   (vsemantic environnement c (SIMPLE(BOOL)) (Atom(A_bool(false)))),
+	   (vsemantic environnement e2 t v)))
+    |_ -> raise (VCSemanticError "Matching vsemantic impossible");;
+
+(*envType -> expr -> regexp list*)
+let rec all_vsemantic l t environnement expression =
+  match l with
+    |[] -> []
+    |head::tail ->
+       POINT(
+	 SYMB(questions t),
+	 POINT(
+	   (vsemantic environnement expression (SIMPLE(t)) head),
+	   SYMB(head)))
+       ::all_vsemantic tail t environnement expression;;
+
+(*envType -> expr -> dataType -> regexp*)
+let semantic environnement expression dataType =
+  match dataType with
+    |SIMPLE(BOOL) -> sigma (all_vsemantic (answers BOOL) BOOL environnement expression)
+    |SIMPLE(INT) -> sigma (all_vsemantic (answers INT) INT environnement expression)
+    |SIMPLE(COMM) -> POINT(SYMB(Atom(RUN)), POINT((csemantic environnement expression), SYMB(Atom(DONE))))
+    |_ -> raise (VCSemanticError "Matching semantic impossible");;
+
+let progEquiv environnement1 fragment_de_programme1 environnement2 fragment_de_programme2 =
+  let regexp1 = semantic environnement1 fragment_de_programme1
+    (checkAndType environnement1 fragment_de_programme1)
+  and regexp2 = semantic environnement2 fragment_de_programme2
+    (checkAndType environnement2 fragment_de_programme2)
+  in check_regexp_prop regexp1 regexp2;;
+
+(*tests*)
+
+let envtest = [("x", SIMPLE(INT)); ("n", SIMPLE(INT)); ("a", REF(INT)); 
+("b", SIMPLE(BOOL)); ("c", SIMPLE(COMM)); ("d", REF(BOOL));];;
+
+questions INT;;
+questions BOOL;;
+answers BOOL;;
+answers INT;;
+alphabet BOOL;;
+alphabet INT;;
+
+all_vsemantic (answers BOOL) BOOL envtest TRUE;;
+sigma (all_vsemantic (answers BOOL) BOOL envtest TRUE);;
+
+semantic envtest (N(1)) (SIMPLE(INT));; 
+string_of_regexp (semantic envtest (N(1)) (SIMPLE(INT)));;
+
+(*semantic envtest (VAR("x")) (SIMPLE(INT));;*)
+
+all_vsemantic (answers INT) INT envtest (ADD(N(1), N(0)));;
+semantic envtest (ADD(N(1), N(0))) (SIMPLE(INT));;
+
+string_of_regexp (semantic envtest TRUE (SIMPLE(BOOL)));;
+
+string_of_regexp (semantic envtest (VAR("b")) (SIMPLE(BOOL)));;
+
+semantic envtest (NOT(NOT(TRUE))) (SIMPLE(BOOL));;
+
+semantic envtest (AND(TRUE, TRUE)) (SIMPLE(BOOL));;
+string_of_regexp (semantic envtest (AND(TRUE, TRUE)) (SIMPLE(BOOL)));;
+
+let evironneme = [("x", SIMPLE(BOOL)); ("y", SIMPLE(BOOL))];;
+
+let monexp = IF(AND(VAR("x"), VAR("y")), N(0), N(1));;
+
+string_of_regexp(semantic evironneme monexp (SIMPLE(INT)));;
+
+ 
